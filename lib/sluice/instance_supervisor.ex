@@ -10,9 +10,21 @@ defmodule Sluice.InstanceSupervisor do
     server_name = Module.concat(name, "Server")
 
     children = [
-      {DynamicSupervisor, name: step_sup_name, strategy: :one_for_one},
-      {Sluice.Server, {module, step_sup_name, init_arg}, name: server_name}
+      %{
+        id: step_sup_name,
+        start:
+          {DynamicSupervisor, :start_link,
+           [[name: step_sup_name, strategy: :one_for_one]]}
+      },
+      %{
+        id: server_name,
+        start:
+          {Sluice.Server, :start_link,
+           [{module, step_sup_name, init_arg}, [name: server_name]]},
+        restart: :temporary
+      }
     ]
+
     Supervisor.init(children, strategy: :rest_for_one)
   end
 end

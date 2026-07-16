@@ -12,6 +12,7 @@ defmodule Sluice.Engine.StepRunner do
 
   @impl true
   def handle_continue({caller, step, input}, _state) do
+    dbg("running #{step} with #{input}")
     output = step.run(input)
     send(caller, {:output, output})
     {:stop, :normal, %{}}

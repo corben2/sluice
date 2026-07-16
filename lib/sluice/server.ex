@@ -32,6 +32,7 @@ defmodule Sluice.Server do
 
   @impl true
   def handle_continue({step, input}, state) do
+    dbg("server going to run #{step} with #{input} in handle_continue")
     Sluice.Engine.run(state.step_sup, step, input)
     {:noreply, state}
   end
@@ -40,9 +41,11 @@ defmodule Sluice.Server do
   def handle_info({:output, output}, state) do
     case state.module.handle_output(output, state.user_state) do
       :complete ->
+        dbg("stopping server")
         {:stop, :normal, state}
 
       {:ok, step, input, user_state} ->
+        dbg("server going to run #{step} with #{input}")
         Sluice.Engine.run(state.step_sup, step, input)
         {:noreply, %{state | user_state: user_state}}
     end
