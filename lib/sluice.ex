@@ -7,11 +7,11 @@ defmodule Sluice do
   """
 
   @callback init(init_arg :: any()) ::
-              {:next, {first_step :: module(), input :: any()}, state :: any()}
+              {:next, {action :: module(), input :: any()}, state :: any()}
               | {:stop, reason :: any()}
 
   @callback handle_output(output :: any(), state :: any()) ::
-              {:next, {next_step :: module(), input :: any()}, state :: any()}
+              {:next, {action :: module(), input :: any()}, state :: any()}
               | :complete
               | {:complete, result :: any()}
 
@@ -24,8 +24,8 @@ defmodule Sluice do
           {:DOWN, ^ref, :process, ^server, :shutdown} ->
             :ok
 
-          {:DOWN, ^ref, :process, ^server, {:shutdown, {:failed_to_run_action, action, reason}}} ->
-            {:error, {:failed_to_run_action, action, reason}}
+          {:DOWN, ^ref, :process, ^server, {:shutdown, {:failed_to_run_action, step, reason}}} ->
+            {:error, {:failed_to_run_action, step, reason}}
 
           {:DOWN, ^ref, :process, ^server, {:shutdown, result}} ->
             {:ok, result}

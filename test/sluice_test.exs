@@ -1,7 +1,7 @@
 defmodule SluiceTest do
   use ExUnit.Case
 
-  # Test workflow: runs a single action that sends a message to the test process
+  # Test sluice: runs a single action that sends a message to the test process
   defmodule SendAction do
     @behaviour Sluice.Action
     def run(parent) do
@@ -10,7 +10,7 @@ defmodule SluiceTest do
     end
   end
 
-  defmodule SingleStepWorkflow do
+  defmodule SingleStepSluice do
     @behaviour Sluice
 
     @impl Sluice
@@ -20,12 +20,12 @@ defmodule SluiceTest do
 
     @impl Sluice
     def handle_output({:done, parent}, _state) do
-      send(parent, {:workflow_complete, self()})
+      send(parent, {:sluice_complete, self()})
       :complete
     end
   end
 
-  # Test workflow: multiple steps
+  # Test sluice: multiple steps
   defmodule Step1 do
     @behaviour Sluice.Action
     def run(parent) do
@@ -42,7 +42,7 @@ defmodule SluiceTest do
     end
   end
 
-  defmodule MultiStepWorkflow do
+  defmodule MultiStepSluice do
     @behaviour Sluice
 
     @impl Sluice
@@ -56,13 +56,13 @@ defmodule SluiceTest do
     end
 
     def handle_output({:step2_done, parent}, _state) do
-      send(parent, {:workflow_complete, self()})
+      send(parent, {:sluice_complete, self()})
       :complete
     end
   end
 
-  # Test workflow: init failure
-  defmodule FailInitWorkflow do
+  # Test sluice: init failure
+  defmodule FailInitSluice do
     @behaviour Sluice
 
     @impl Sluice
@@ -77,7 +77,7 @@ defmodule SluiceTest do
     end
   end
 
-  # Test workflow: returns a result
+  # Test sluice: returns a result
   defmodule ResultAction do
     @behaviour Sluice.Action
     def run(n) do
@@ -85,7 +85,7 @@ defmodule SluiceTest do
     end
   end
 
-  defmodule ResultWorkflow do
+  defmodule ResultSluice do
     @behaviour Sluice
 
     @impl Sluice
@@ -99,7 +99,7 @@ defmodule SluiceTest do
     end
   end
 
-  # Test workflow: action crash
+  # Test sluice: action crash
   defmodule CrashAction do
     @behaviour Sluice.Action
     def run(_) do
@@ -107,7 +107,7 @@ defmodule SluiceTest do
     end
   end
 
-  defmodule CrashWorkflow do
+  defmodule CrashSluice do
     @behaviour Sluice
 
     @impl Sluice
@@ -116,47 +116,47 @@ defmodule SluiceTest do
     end
 
     @impl Sluice
-    def handle_output({:DOWN, {CrashAction, _}, reason}, state) do
+    def handle_output({:exception, {CrashAction, _}, reason}, state) do
       send(state.parent, {:crashed, reason})
       :complete
     end
   end
 
   describe "start/2" do
-    test "runs a single-step workflow to completion" do
-      assert :ok = Sluice.start(SingleStepWorkflow, self())
+    test "runs a single-step sluice to completion" do
+      assert :ok = Sluice.start(SingleStepSluice, self())
       assert_receive {:action_ran, _runner_pid}
-      assert_receive {:workflow_complete, _server_pid}
+      assert_receive {:sluice_complete, _server_pid}
     end
 
-    test "runs a multi-step workflow to completion" do
-      assert :ok = Sluice.start(MultiStepWorkflow, self())
+    test "runs a multi-step sluice to completion" do
+      assert :ok = Sluice.start(MultiStepSluice, self())
       assert_receive {:step1, _}
       assert_receive {:step2, _}
-      assert_receive {:workflow_complete, _}
+      assert_receive {:sluice_complete, _}
     end
 
     test "returns {:error, reason} when init fails" do
-      assert {:error, :init_failed} = Sluice.start(FailInitWorkflow, self())
+      assert {:error, :init_failed} = Sluice.start(FailInitSluice, self())
     end
 
     test "handles action crashes via handle_output" do
-      assert :ok = Sluice.start(CrashWorkflow, self())
+      assert :ok = Sluice.start(CrashSluice, self())
       assert_receive {:crashed, reason}
       assert {%RuntimeError{}, _stacktrace} = reason
     end
 
-    test "returns a result from workflow" do
-      assert {:ok, 42} = Sluice.start(ResultWorkflow, 21)
+    test "returns a result from sluice" do
+      assert {:ok, 42} = Sluice.start(ResultSluice, 21)
     end
   end
 
   describe "concurrent instances" do
-    test "two workflows run independently" do
+    test "two sluices run independently" do
       parent = self()
 
-      task1 = Task.async(fn -> Sluice.start(SingleStepWorkflow, parent) end)
-      task2 = Task.async(fn -> Sluice.start(SingleStepWorkflow, parent) end)
+      task1 = Task.async(fn -> Sluice.start(SingleStepSluice, parent) end)
+      task2 = Task.async(fn -> Sluice.start(SingleStepSluice, parent) end)
 
       assert :ok = Task.await(task1)
       assert :ok = Task.await(task2)
