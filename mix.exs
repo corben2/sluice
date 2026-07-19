@@ -13,6 +13,7 @@ defmodule Sluice.MixProject do
 
   defp deps do
     [
+      {:telemetry, "~> 1.4", optional: true},
       {:dialyxir, "~> 1.4", only: :dev, runtime: false}
     ]
   end

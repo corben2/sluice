@@ -1,6 +1,8 @@
 defmodule Sluice.Server do
   use GenServer, restart: :temporary
 
+  @compile {:no_warn_undefined, Telemetry}
+
   @opaque state :: %__MODULE__{
             sluice: module(),
             action_sup: pid(),
@@ -17,8 +19,9 @@ defmodule Sluice.Server do
   @impl true
   def init({sluice, init_arg}) do
     {:ok, action_sup} = DynamicSupervisor.start_link(strategy: :one_for_one)
+
     case sluice.init(init_arg) do
-      {:next, action, user_state} ->
+      {:next, step, user_state} ->
         state = %__MODULE__{
           sluice: sluice,
           action_sup: action_sup,
@@ -26,7 +29,7 @@ defmodule Sluice.Server do
           monitored: %{}
         }
 
-        {:ok, state, {:continue, action}}
+        {:ok, state, {:continue, step}}
 
       other ->
         other
@@ -34,23 +37,22 @@ defmodule Sluice.Server do
   end
 
   @impl true
-  def handle_continue(action, state) do
-    case Sluice.Action.run(state.action_sup, action) do
-      {:ok, pid} ->
-        ref = Process.monitor(pid)
-        new_state = put_in(state.monitored[pid], {ref, action})
-        {:noreply, new_state}
-      {:error, reason} ->
-        {:stop, {:shutdown, {:failed_to_run_action, action, reason}}, state}
-    end
+  def handle_continue(step, state) do
+    run_action(step, state)
   end
 
   @impl true
   def handle_info({:output, from, output}, state) do
     case pop_in(state.monitored[from]) do
-      {{ref, _action}, new_state} ->
+      {{ref, _step}, new_state} ->
+        emit_event([:sluice, :action, :output], %{}, %{
+          sluice: state.sluice,
+          output: output
+        })
+
         Process.demonitor(ref)
         handle_output(output, new_state)
+
       {nil, _} ->
         {:noreply, state}
     end
@@ -58,9 +60,19 @@ defmodule Sluice.Server do
 
   def handle_info({:DOWN, ref, :process, pid, reason}, state) do
     case pop_in(state.monitored[pid]) do
-      {{^ref, action}, new_state} ->
+      {{^ref, step}, new_state} ->
+        {action, input} = step
+
+        emit_event([:sluice, :action, :exception], %{}, %{
+          sluice: state.sluice,
+          action: action,
+          input: input,
+          reason: reason
+        })
+
         Process.demonitor(ref)
-        handle_output({:DOWN, action, reason}, new_state)
+        handle_output({:exception, step, reason}, new_state)
+
       {nil, new_state} ->
         {:noreply, new_state}
     end
@@ -74,15 +86,34 @@ defmodule Sluice.Server do
       {:complete, result} ->
         {:stop, {:shutdown, result}, state}
 
-      {:next, action, user_state} ->
-        case Sluice.Action.run(state.action_sup, action) do
-          {:ok, pid} ->
-            ref = Process.monitor(pid)
-            new_state = put_in(state.monitored[pid], {ref, action})
-            {:noreply, %{new_state | user_state: user_state}}
-          {:error, reason} ->
-            {:stop, {:shutdown, {:failed_to_run_action, action, reason}}, state}
-        end
+      {:next, step, user_state} ->
+        run_action(step, %{state | user_state: user_state})
+    end
+  end
+
+  defp run_action(step, state) do
+    {action, input} = step
+
+    emit_event([:sluice, :action, :start], %{}, %{
+      sluice: state.sluice,
+      action: action,
+      input: input
+    })
+
+    case Sluice.Action.run(state.action_sup, step) do
+      {:ok, pid} ->
+        ref = Process.monitor(pid)
+        new_state = put_in(state.monitored[pid], {ref, step})
+        {:noreply, new_state}
+
+      {:error, reason} ->
+        {:stop, {:shutdown, {:failed_to_run_action, step, reason}}, state}
+    end
+  end
+
+  defp emit_event(event, measurements, metadata) do
+    if Code.ensure_loaded?(Telemetry) do
+      Telemetry.execute(event, measurements, metadata)
     end
   end
 end
