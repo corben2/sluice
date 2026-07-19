@@ -6,14 +6,7 @@ defmodule Sluice.Supervisor do
   end
 
   def start_instance(module, init_arg) do
-    with {:ok, instance} <-
-           DynamicSupervisor.start_child(Sluice.Supervisor, {DynamicSupervisor, strategy: :one_for_one}),
-         {:ok, step_sup} <-
-           DynamicSupervisor.start_child(instance, {DynamicSupervisor, strategy: :one_for_one}),
-         {:ok, _server} <-
-           DynamicSupervisor.start_child(instance, {Sluice.Server, {module, step_sup, init_arg}}) do
-      {:ok, instance}
-    end
+    DynamicSupervisor.start_child(Sluice.Supervisor, {Sluice.Server, {module, init_arg}})
   end
 
   @impl true
