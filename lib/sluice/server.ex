@@ -1,4 +1,12 @@
 defmodule Sluice.Server do
+  @moduledoc """
+  Per-instance GenServer that runs a sluice.
+
+  Created by `Sluice.Supervisor` for each call to `Sluice.start/2`.
+  Owns an internal `DynamicSupervisor` for action runners. Not meant
+  to be used directly.
+  """
+
   use GenServer, restart: :temporary
 
   @compile {:no_warn_undefined, Telemetry}
@@ -12,6 +20,8 @@ defmodule Sluice.Server do
 
   defstruct [:sluice, :action_sup, :user_state, :monitored]
 
+  @doc false
+  @spec start_link({module(), any()}, GenServer.options()) :: GenServer.on_start()
   def start_link(args, opts \\ []) do
     GenServer.start_link(__MODULE__, args, opts)
   end
