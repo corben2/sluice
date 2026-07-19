@@ -8,12 +8,15 @@ defmodule Sluice do
 
   @callback init(init_arg :: any()) ::
               {:next, {action :: module(), input :: any()}, state :: any()}
+              | {:next, [{action :: module(), input :: any()}], state :: any()}
               | {:stop, reason :: any()}
 
   @callback handle_output(output :: any(), state :: any()) ::
               {:next, {action :: module(), input :: any()}, state :: any()}
+              | {:next, [{action :: module(), input :: any()}], state :: any()}
               | :complete
               | {:complete, result :: any()}
+              | {:wait, state :: any()}
 
   def start(module, init_arg) do
     case Sluice.Supervisor.start_instance(module, init_arg) do
