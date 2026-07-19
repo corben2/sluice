@@ -99,6 +99,44 @@ defmodule SluiceTest do
     end
   end
 
+  # Test sluice: parallel actions from init
+  defmodule ActionA do
+    @behaviour Sluice.Action
+    def run(parent) do
+      send(parent, {:action_a_ran, self()})
+      {:a_done, parent}
+    end
+  end
+
+  defmodule ActionB do
+    @behaviour Sluice.Action
+    def run(parent) do
+      send(parent, {:action_b_ran, self()})
+      {:b_done, parent}
+    end
+  end
+
+  defmodule ParallelInitSluice do
+    @behaviour Sluice
+
+    @impl Sluice
+    def init(parent) do
+      {:next, [{ActionA, parent}, {ActionB, parent}], %{parent: parent, results: []}}
+    end
+
+    @impl Sluice
+    def handle_output(output, %{results: results} = state) do
+      results = [output | results]
+
+      if length(results) == 2 do
+        send(state.parent, {:parallel_complete, self()})
+        :complete
+      else
+        {:wait, %{state | results: results}}
+      end
+    end
+  end
+
   # Test sluice: action crash
   defmodule CrashAction do
     @behaviour Sluice.Action
@@ -134,6 +172,13 @@ defmodule SluiceTest do
       assert_receive {:step1, _}
       assert_receive {:step2, _}
       assert_receive {:sluice_complete, _}
+    end
+
+    test "runs parallel actions from init" do
+      assert :ok = Sluice.start(ParallelInitSluice, self())
+      assert_receive {:action_a_ran, _}
+      assert_receive {:action_b_ran, _}
+      assert_receive {:parallel_complete, _}
     end
 
     test "returns {:error, reason} when init fails" do
