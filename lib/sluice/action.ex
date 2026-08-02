@@ -2,6 +2,14 @@ defmodule Sluice.Action do
   @callback run(any()) :: any()
 
   def run(action_sup, action) do
-    DynamicSupervisor.start_child(action_sup, {Sluice.ActionRunner, {self(), action}})
+    {module, input} = action
+    caller = self()
+
+    execute = fn ->
+      output = module.run(input)
+      send(caller, {:output, self(), output})
+    end
+
+    DynamicSupervisor.start_child(action_sup, {Task, execute})
   end
 end
