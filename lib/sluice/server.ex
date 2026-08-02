@@ -1,8 +1,6 @@
 defmodule Sluice.Server do
   use GenServer, restart: :temporary
 
-  @compile {:no_warn_undefined, Telemetry}
-
   @opaque state :: %__MODULE__{
             sluice: module(),
             action_sup: pid(),
