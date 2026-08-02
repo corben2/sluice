@@ -1,6 +1,28 @@
 defmodule SluiceTest do
   use ExUnit.Case
 
+  setup do
+    {:ok, _started} = Application.ensure_all_started(:telemetry)
+    :ok
+  end
+
+  defp attach_telemetry(event) do
+    test_pid = self()
+    handler_id = {__MODULE__, event, make_ref()}
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        event,
+        fn received_event, measurements, metadata, _config ->
+          send(test_pid, {:telemetry, received_event, measurements, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+  end
+
   # Test sluice: runs a single action that sends a message to the test process
   defmodule SendAction do
     @behaviour Sluice.Action
@@ -193,6 +215,51 @@ defmodule SluiceTest do
 
     test "returns a result from sluice" do
       assert {:ok, 42} = Sluice.start(ResultSluice, 21)
+    end
+  end
+
+  describe "telemetry" do
+    test "emits an action start event" do
+      event = [:sluice, :action, :start]
+      attach_telemetry(event)
+
+      assert :ok = Sluice.start(SingleStepSluice, self())
+      assert_receive {:telemetry, ^event, %{}, metadata}
+
+      assert metadata == %{
+               sluice: SingleStepSluice,
+               action: SendAction,
+               input: self()
+             }
+    end
+
+    test "emits an action output event" do
+      event = [:sluice, :action, :output]
+      attach_telemetry(event)
+
+      parent = self()
+      run = Task.async(fn -> Sluice.start(SingleStepSluice, parent) end)
+
+      assert_receive {:telemetry, ^event, %{}, metadata}
+      Task.await(run)
+
+      assert metadata == %{
+               sluice: SingleStepSluice,
+               output: {:done, parent}
+             }
+    end
+
+    test "emits an action exception event" do
+      event = [:sluice, :action, :exception]
+      attach_telemetry(event)
+
+      assert :ok = Sluice.start(CrashSluice, self())
+      assert_receive {:telemetry, ^event, %{}, metadata}
+
+      assert metadata.sluice == CrashSluice
+      assert metadata.action == CrashAction
+      assert metadata.input == self()
+      assert {%RuntimeError{}, _stacktrace} = metadata.reason
     end
   end
 

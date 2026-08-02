@@ -140,8 +140,8 @@ defmodule Sluice.Server do
   end
 
   defp emit_event(event, measurements, metadata) do
-    if Code.ensure_loaded?(Telemetry) do
-      Telemetry.execute(event, measurements, metadata)
+    if Code.ensure_loaded?(:telemetry) do
+      :telemetry.execute(event, measurements, metadata)
     end
   end
 end
