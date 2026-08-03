@@ -6,14 +6,18 @@ defmodule Sluice do
   The workflow runs in a supervised process under `Sluice.Supervisor`.
   """
 
+  @type tag() :: any()
+  @type action() :: module() | (any() -> any())
+  @type step() :: {tag(), action(), input :: any()}
+
   @callback init(init_arg :: any()) ::
-              {:next, {action :: module(), input :: any()}, state :: any()}
-              | {:next, [{action :: module(), input :: any()}], state :: any()}
+              {:next, step(), state :: any()}
+              | {:next, [step()], state :: any()}
               | {:stop, reason :: any()}
 
   @callback handle_output(output :: any(), state :: any()) ::
-              {:next, {action :: module(), input :: any()}, state :: any()}
-              | {:next, [{action :: module(), input :: any()}], state :: any()}
+              {:next, step(), state :: any()}
+              | {:next, [step()], state :: any()}
               | :complete
               | {:complete, result :: any()}
               | {:wait, state :: any()}

@@ -37,11 +37,11 @@ defmodule SluiceTest do
 
     @impl Sluice
     def init(parent) do
-      {:next, {SendAction, parent}, %{parent: parent}}
+      {:next, {:single, SendAction, parent}, %{parent: parent}}
     end
 
     @impl Sluice
-    def handle_output({:done, parent}, _state) do
+    def handle_output({:single, {:done, parent}}, _state) do
       send(parent, {:sluice_complete, self()})
       :complete
     end
@@ -69,15 +69,15 @@ defmodule SluiceTest do
 
     @impl Sluice
     def init(parent) do
-      {:next, {Step1, parent}, %{parent: parent}}
+      {:next, {:first, Step1, parent}, %{parent: parent}}
     end
 
     @impl Sluice
-    def handle_output({:step1_done, parent}, state) do
-      {:next, {Step2, parent}, state}
+    def handle_output({:first, {:step1_done, parent}}, state) do
+      {:next, {:second, Step2, parent}, state}
     end
 
-    def handle_output({:step2_done, parent}, _state) do
+    def handle_output({:second, {:step2_done, parent}}, _state) do
       send(parent, {:sluice_complete, self()})
       :complete
     end
@@ -112,11 +112,11 @@ defmodule SluiceTest do
 
     @impl Sluice
     def init(n) do
-      {:next, {ResultAction, n}, %{}}
+      {:next, {:result, ResultAction, n}, %{}}
     end
 
     @impl Sluice
-    def handle_output({:done, result}, _state) do
+    def handle_output({:result, {:done, result}}, _state) do
       {:complete, result}
     end
   end
@@ -143,7 +143,8 @@ defmodule SluiceTest do
 
     @impl Sluice
     def init(parent) do
-      {:next, [{ActionA, parent}, {ActionB, parent}], %{parent: parent, results: []}}
+      {:next, [{:action_a, ActionA, parent}, {:action_b, ActionB, parent}],
+       %{parent: parent, results: []}}
     end
 
     @impl Sluice
@@ -172,12 +173,26 @@ defmodule SluiceTest do
 
     @impl Sluice
     def init(parent) do
-      {:next, {CrashAction, parent}, %{parent: parent}}
+      {:next, {:crash, CrashAction, parent}, %{parent: parent}}
     end
 
     @impl Sluice
-    def handle_output({:exception, {CrashAction, _}, reason}, state) do
+    def handle_output({:crash, {:exception, reason}}, state) do
       send(state.parent, {:crashed, reason})
+      :complete
+    end
+  end
+
+  defmodule DuplicateTagSluice do
+    @behaviour Sluice
+
+    @impl Sluice
+    def init(parent) do
+      {:next, [{:duplicate, ActionA, parent}, {:duplicate, ActionB, parent}], %{parent: parent}}
+    end
+
+    @impl Sluice
+    def handle_output(_output, _state) do
       :complete
     end
   end
@@ -213,6 +228,13 @@ defmodule SluiceTest do
       assert {%RuntimeError{}, _stacktrace} = reason
     end
 
+    test "rejects duplicate tags among running actions" do
+      parent = self()
+
+      assert {:ok, {:duplicate_running_step_tag, :duplicate}} =
+               Sluice.start(DuplicateTagSluice, parent)
+    end
+
     test "returns a result from sluice" do
       assert {:ok, 42} = Sluice.start(ResultSluice, 21)
     end
@@ -220,7 +242,7 @@ defmodule SluiceTest do
 
   describe "telemetry" do
     test "emits an action start event" do
-      event = [:sluice, :action, :start]
+      event = [:sluice, :step, :start]
       attach_telemetry(event)
 
       assert :ok = Sluice.start(SingleStepSluice, self())
@@ -228,13 +250,14 @@ defmodule SluiceTest do
 
       assert metadata == %{
                sluice: SingleStepSluice,
+               tag: :single,
                action: SendAction,
                input: self()
              }
     end
 
     test "emits an action output event" do
-      event = [:sluice, :action, :output]
+      event = [:sluice, :step, :output]
       attach_telemetry(event)
 
       parent = self()
@@ -245,18 +268,22 @@ defmodule SluiceTest do
 
       assert metadata == %{
                sluice: SingleStepSluice,
-               output: {:done, parent}
+               tag: :single,
+               output: {:done, parent},
+               action: SendAction,
+               input: parent
              }
     end
 
     test "emits an action exception event" do
-      event = [:sluice, :action, :exception]
+      event = [:sluice, :step, :exception]
       attach_telemetry(event)
 
       assert :ok = Sluice.start(CrashSluice, self())
       assert_receive {:telemetry, ^event, %{}, metadata}
 
       assert metadata.sluice == CrashSluice
+      assert metadata.tag == :crash
       assert metadata.action == CrashAction
       assert metadata.input == self()
       assert {%RuntimeError{}, _stacktrace} = metadata.reason
