@@ -2,6 +2,7 @@ defmodule SluiceTest do
   use ExUnit.Case
 
   setup do
+    start_supervised!({Sluice.Supervisor, []})
     {:ok, _started} = Application.ensure_all_started(:telemetry)
     :ok
   end
@@ -25,19 +26,18 @@ defmodule SluiceTest do
 
   # Test sluice: runs a single action that sends a message to the test process
   defmodule SendAction do
-    @behaviour Sluice.Action
     def run(parent) do
       send(parent, {:action_ran, self()})
       {:done, parent}
     end
   end
 
-  defmodule SingleStepSluice do
+  defmodule SingleActionSluice do
     @behaviour Sluice
 
     @impl Sluice
     def init(parent) do
-      {:next, {:single, SendAction, parent}, %{parent: parent}}
+      {:next, {:single, {SendAction, :run, [parent]}}, %{parent: parent}}
     end
 
     @impl Sluice
@@ -47,37 +47,35 @@ defmodule SluiceTest do
     end
   end
 
-  # Test sluice: multiple steps
-  defmodule Step1 do
-    @behaviour Sluice.Action
+  # Test sluice: multiple actions
+  defmodule FirstAction do
     def run(parent) do
-      send(parent, {:step1, self()})
-      {:step1_done, parent}
+      send(parent, {:first_action, self()})
+      {:first_action_done, parent}
     end
   end
 
-  defmodule Step2 do
-    @behaviour Sluice.Action
+  defmodule SecondAction do
     def run(parent) do
-      send(parent, {:step2, self()})
-      {:step2_done, parent}
+      send(parent, {:second_action, self()})
+      {:second_action_done, parent}
     end
   end
 
-  defmodule MultiStepSluice do
+  defmodule MultiActionSluice do
     @behaviour Sluice
 
     @impl Sluice
     def init(parent) do
-      {:next, {:first, Step1, parent}, %{parent: parent}}
+      {:next, {:first, {FirstAction, :run, [parent]}}, %{parent: parent}}
     end
 
     @impl Sluice
-    def handle_output({:first, {:step1_done, parent}}, state) do
-      {:next, {:second, Step2, parent}, state}
+    def handle_output({:first, {:first_action_done, parent}}, state) do
+      {:next, {:second, {SecondAction, :run, [parent]}}, state}
     end
 
-    def handle_output({:second, {:step2_done, parent}}, _state) do
+    def handle_output({:second, {:second_action_done, parent}}, _state) do
       send(parent, {:sluice_complete, self()})
       :complete
     end
@@ -101,7 +99,6 @@ defmodule SluiceTest do
 
   # Test sluice: returns a result
   defmodule ResultAction do
-    @behaviour Sluice.Action
     def run(n) do
       {:done, n * 2}
     end
@@ -112,7 +109,7 @@ defmodule SluiceTest do
 
     @impl Sluice
     def init(n) do
-      {:next, {:result, ResultAction, n}, %{}}
+      {:next, {:result, {ResultAction, :run, [n]}}, %{}}
     end
 
     @impl Sluice
@@ -123,7 +120,6 @@ defmodule SluiceTest do
 
   # Test sluice: parallel actions from init
   defmodule ActionA do
-    @behaviour Sluice.Action
     def run(parent) do
       send(parent, {:action_a_ran, self()})
       {:a_done, parent}
@@ -131,7 +127,6 @@ defmodule SluiceTest do
   end
 
   defmodule ActionB do
-    @behaviour Sluice.Action
     def run(parent) do
       send(parent, {:action_b_ran, self()})
       {:b_done, parent}
@@ -143,7 +138,7 @@ defmodule SluiceTest do
 
     @impl Sluice
     def init(parent) do
-      {:next, [{:action_a, ActionA, parent}, {:action_b, ActionB, parent}],
+      {:next, [{:action_a, {ActionA, :run, [parent]}}, {:action_b, {ActionB, :run, [parent]}}],
        %{parent: parent, results: []}}
     end
 
@@ -162,7 +157,6 @@ defmodule SluiceTest do
 
   # Test sluice: action crash
   defmodule CrashAction do
-    @behaviour Sluice.Action
     def run(_) do
       raise "action crashed"
     end
@@ -173,7 +167,7 @@ defmodule SluiceTest do
 
     @impl Sluice
     def init(parent) do
-      {:next, {:crash, CrashAction, parent}, %{parent: parent}}
+      {:next, {:crash, {CrashAction, :run, [parent]}}, %{parent: parent}}
     end
 
     @impl Sluice
@@ -188,7 +182,11 @@ defmodule SluiceTest do
 
     @impl Sluice
     def init(parent) do
-      {:next, [{:duplicate, ActionA, parent}, {:duplicate, ActionB, parent}], %{parent: parent}}
+      {:next,
+       [
+         {:duplicate, {ActionA, :run, [parent]}},
+         {:duplicate, {ActionB, :run, [parent]}}
+       ], %{parent: parent}}
     end
 
     @impl Sluice
@@ -198,16 +196,16 @@ defmodule SluiceTest do
   end
 
   describe "start/2" do
-    test "runs a single-step sluice to completion" do
-      assert :ok = Sluice.start(SingleStepSluice, self())
+    test "runs a single action to completion" do
+      assert :ok = Sluice.start(SingleActionSluice, self())
       assert_receive {:action_ran, _runner_pid}
       assert_receive {:sluice_complete, _server_pid}
     end
 
-    test "runs a multi-step sluice to completion" do
-      assert :ok = Sluice.start(MultiStepSluice, self())
-      assert_receive {:step1, _}
-      assert_receive {:step2, _}
+    test "runs multiple actions to completion" do
+      assert :ok = Sluice.start(MultiActionSluice, self())
+      assert_receive {:first_action, _}
+      assert_receive {:second_action, _}
       assert_receive {:sluice_complete, _}
     end
 
@@ -231,52 +229,50 @@ defmodule SluiceTest do
     test "rejects duplicate tags among running actions" do
       parent = self()
 
-      assert {:ok, {:duplicate_running_step_tag, :duplicate}} =
+      assert {:duplicate_running_action_tag, :duplicate} =
                Sluice.start(DuplicateTagSluice, parent)
     end
 
     test "returns a result from sluice" do
-      assert {:ok, 42} = Sluice.start(ResultSluice, 21)
+      assert 42 = Sluice.start(ResultSluice, 21)
     end
   end
 
   describe "telemetry" do
     test "emits an action start event" do
-      event = [:sluice, :step, :start]
+      event = [:sluice, :action, :start]
       attach_telemetry(event)
 
-      assert :ok = Sluice.start(SingleStepSluice, self())
+      assert :ok = Sluice.start(SingleActionSluice, self())
       assert_receive {:telemetry, ^event, %{}, metadata}
 
       assert metadata == %{
-               sluice: SingleStepSluice,
+               sluice: SingleActionSluice,
                tag: :single,
-               action: SendAction,
-               input: self()
+               call: {SendAction, :run, 1}
              }
     end
 
     test "emits an action output event" do
-      event = [:sluice, :step, :output]
+      event = [:sluice, :action, :output]
       attach_telemetry(event)
 
       parent = self()
-      run = Task.async(fn -> Sluice.start(SingleStepSluice, parent) end)
+      run = Task.async(fn -> Sluice.start(SingleActionSluice, parent) end)
 
       assert_receive {:telemetry, ^event, %{}, metadata}
       Task.await(run)
 
       assert metadata == %{
-               sluice: SingleStepSluice,
+               sluice: SingleActionSluice,
                tag: :single,
                output: {:done, parent},
-               action: SendAction,
-               input: parent
+               call: {SendAction, :run, 1}
              }
     end
 
     test "emits an action exception event" do
-      event = [:sluice, :step, :exception]
+      event = [:sluice, :action, :exception]
       attach_telemetry(event)
 
       assert :ok = Sluice.start(CrashSluice, self())
@@ -284,8 +280,7 @@ defmodule SluiceTest do
 
       assert metadata.sluice == CrashSluice
       assert metadata.tag == :crash
-      assert metadata.action == CrashAction
-      assert metadata.input == self()
+      assert metadata.call == {CrashAction, :run, [self()]}
       assert {%RuntimeError{}, _stacktrace} = metadata.reason
     end
   end
@@ -294,8 +289,8 @@ defmodule SluiceTest do
     test "two sluices run independently" do
       parent = self()
 
-      task1 = Task.async(fn -> Sluice.start(SingleStepSluice, parent) end)
-      task2 = Task.async(fn -> Sluice.start(SingleStepSluice, parent) end)
+      task1 = Task.async(fn -> Sluice.start(SingleActionSluice, parent) end)
+      task2 = Task.async(fn -> Sluice.start(SingleActionSluice, parent) end)
 
       assert :ok = Task.await(task1)
       assert :ok = Task.await(task2)

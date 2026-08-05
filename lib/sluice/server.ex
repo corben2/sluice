@@ -5,7 +5,7 @@ defmodule Sluice.Server do
             sluice: module(),
             action_sup: pid(),
             user_state: any(),
-            monitored: %{pid() => {reference(), Sluice.step()}},
+            monitored: %{pid() => {reference(), Sluice.action()}},
             running_tags: %{any() => pid()}
           }
 
@@ -18,8 +18,8 @@ defmodule Sluice.Server do
   @impl true
   def init({sluice, init_arg}) do
     case sluice.init(init_arg) do
-      {:next, steps, user_state} ->
-        {:ok, action_sup} = DynamicSupervisor.start_link(strategy: :one_for_one)
+      {:next, actions, user_state} ->
+        {:ok, action_sup} = Task.Supervisor.start_link(strategy: :one_for_one)
 
         state = %__MODULE__{
           sluice: sluice,
@@ -29,7 +29,7 @@ defmodule Sluice.Server do
           running_tags: %{}
         }
 
-        {:ok, state, {:continue, steps}}
+        {:ok, state, {:continue, actions}}
 
       other ->
         other
@@ -37,56 +37,56 @@ defmodule Sluice.Server do
   end
 
   @impl true
-  def handle_continue(steps, state) when is_list(steps) do
-    run_actions(steps, state)
+  def handle_continue(actions, state) when is_list(actions) do
+    run_actions(actions, state)
   end
 
-  def handle_continue(step, state) do
-    run_action(step, state)
+  def handle_continue(action, state) do
+    run_action(action, state)
   end
 
   @impl true
-  def handle_info({:output, from, output}, state) do
-    case pop_in(state.monitored[from]) do
-      {{ref, step}, new_state} ->
-        {tag, action, input} = step
-        new_state = untrack_action(new_state, from, tag)
+  def handle_info({ref, output}, state) do
+    Process.demonitor(ref)
 
-        emit_event([:sluice, :step, :output], %{}, %{
+    case pop_in(state.monitored[ref]) do
+      {nil, new_state} ->
+        {:noreply, new_state}
+
+      {action, new_state} ->
+        {tag, {module, function, args}} = action
+        new_state = untrack_action(new_state, ref, tag)
+
+        emit_event([:sluice, :action, :output], %{}, %{
           sluice: state.sluice,
           tag: tag,
           output: output,
-          action: action,
-          input: input
+          call: {module, function, length(args)}
         })
 
-        Process.demonitor(ref)
         handle_output({tag, output}, new_state)
-
-      {nil, new_state} ->
-        {:noreply, new_state}
     end
   end
 
-  def handle_info({:DOWN, ref, :process, pid, reason}, state) do
-    case pop_in(state.monitored[pid]) do
-      {{^ref, step}, new_state} ->
-        {tag, action, input} = step
-        new_state = untrack_action(new_state, pid, tag)
+  def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
+    Process.demonitor(ref)
 
-        emit_event([:sluice, :step, :exception], %{}, %{
+    case pop_in(state.monitored[ref]) do
+      {nil, new_state} ->
+        {:noreply, new_state}
+
+      {action, new_state} ->
+        {tag, {module, function, args}} = action
+        new_state = untrack_action(new_state, ref, tag)
+
+        emit_event([:sluice, :action, :exception], %{}, %{
           sluice: state.sluice,
           tag: tag,
-          action: action,
-          input: input,
+          call: {module, function, args},
           reason: reason
         })
 
-        Process.demonitor(ref)
         handle_output({tag, {:exception, reason}}, new_state)
-
-      {nil, new_state} ->
-        {:noreply, new_state}
     end
   end
 
@@ -101,24 +101,24 @@ defmodule Sluice.Server do
       {:wait, user_state} ->
         {:noreply, %{state | user_state: user_state}}
 
-      {:next, steps, user_state} when is_list(steps) ->
-        validate_and_run_actions(steps, %{state | user_state: user_state})
+      {:next, actions, user_state} when is_list(actions) ->
+        validate_and_run_actions(actions, %{state | user_state: user_state})
 
-      {:next, step, user_state} ->
-        run_action(step, %{state | user_state: user_state})
+      {:next, action, user_state} ->
+        run_action(action, %{state | user_state: user_state})
     end
   end
 
-  defp validate_and_run_actions(steps, state) do
-    case validate_step_tags(steps, state.running_tags) do
-      :ok -> run_actions(steps, state)
+  defp validate_and_run_actions(actions, state) do
+    case validate_action_tags(actions, state.running_tags) do
+      :ok -> run_actions(actions, state)
       {:error, reason} -> {:stop, {:shutdown, reason}, state}
     end
   end
 
-  defp validate_step_tags(steps, running_tags) do
+  defp validate_action_tags(actions, running_tags) do
     duped =
-      steps
+      actions
       |> Enum.map(&elem(&1, 0))
       |> Kernel.++(Map.keys(running_tags))
       |> Enum.frequencies()
@@ -129,13 +129,13 @@ defmodule Sluice.Server do
         :ok
 
       {tag, _count} ->
-        {:error, {:duplicate_running_step_tag, tag}}
+        {:error, {:duplicate_running_action_tag, tag}}
     end
   end
 
-  defp run_actions(steps, state) do
-    case Enum.reduce_while(steps, state, fn step, state ->
-           case start_action(step, state) do
+  defp run_actions(actions, state) do
+    case Enum.reduce_while(actions, state, fn action, state ->
+           case start_action(action, state) do
              {:ok, state} -> {:cont, state}
              {:error, reason} -> {:halt, {:error, reason, state}}
            end
@@ -145,34 +145,27 @@ defmodule Sluice.Server do
     end
   end
 
-  defp run_action(step, state) do
-    case start_action(step, state) do
+  defp run_action(action, state) do
+    case start_action(action, state) do
       {:ok, state} -> {:noreply, state}
-      {:error, reason} -> {:stop, {:shutdown, reason}, state}
+      {:error, reason} -> {:stop, {:shutdown, {:error, reason}}, state}
     end
   end
 
-  defp start_action({tag, _action, _input}, %{running_tags: running_tags})
-       when is_map_key(running_tags, tag), do: {:error, {:duplicate_running_step_tag, tag}}
+  defp start_action({tag, {_module, _function, _args}}, %{running_tags: running_tags})
+       when is_map_key(running_tags, tag), do: {:error, {:duplicate_running_action_tag, tag}}
 
-  defp start_action(step, state) do
-    {tag, action, input} = step
+  defp start_action(action, state) do
+    {tag, {module, function, args} = call} = action
 
-    emit_event([:sluice, :step, :start], %{}, %{
+    emit_event([:sluice, :action, :start], %{}, %{
       sluice: state.sluice,
       tag: tag,
-      action: action,
-      input: input
+      call: {module, function, length(args)}
     })
 
-    case Sluice.Action.run(state.action_sup, {action, input}) do
-      {:ok, pid} ->
-        ref = Process.monitor(pid)
-        {:ok, track_action(state, pid, ref, step)}
-
-      {:error, reason} ->
-        {:error, {:failed_to_run_action, step, reason}}
-    end
+    task = Task.Supervisor.async_nolink(state.action_sup, fn -> apply(module, function, args) end)
+    {:ok, track_action(state, task.ref, tag, call)}
   end
 
   defp emit_event(event, measurements, metadata) do
@@ -181,18 +174,20 @@ defmodule Sluice.Server do
     end
   end
 
-  defp track_action(state, pid, ref, {tag, _action, _input} = step) do
+  defp track_action(state, ref, tag, call) do
+    {module, function, args} = call
+
     %{
       state
-      | monitored: Map.put(state.monitored, pid, {ref, step}),
-        running_tags: Map.put(state.running_tags, tag, pid)
+      | monitored: Map.put(state.monitored, ref, {tag, {module, function, args}}),
+        running_tags: Map.put(state.running_tags, tag, ref)
     }
   end
 
-  defp untrack_action(state, pid, tag) do
+  defp untrack_action(state, ref, tag) do
     %{
       state
-      | monitored: Map.delete(state.monitored, pid),
+      | monitored: Map.delete(state.monitored, ref),
         running_tags: Map.delete(state.running_tags, tag)
     }
   end

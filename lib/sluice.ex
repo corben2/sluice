@@ -7,17 +7,17 @@ defmodule Sluice do
   """
 
   @type tag() :: any()
-  @type action() :: module() | (any() -> any())
-  @type step() :: {tag(), action(), input :: any()}
+  @type call() :: mfa()
+  @type action() :: {tag(), call()}
 
   @callback init(init_arg :: any()) ::
-              {:next, step(), state :: any()}
-              | {:next, [step()], state :: any()}
+              {:next, action(), state :: any()}
+              | {:next, [action()], state :: any()}
               | {:stop, reason :: any()}
 
   @callback handle_output(output :: any(), state :: any()) ::
-              {:next, step(), state :: any()}
-              | {:next, [step()], state :: any()}
+              {:next, action(), state :: any()}
+              | {:next, [action()], state :: any()}
               | :complete
               | {:complete, result :: any()}
               | {:wait, state :: any()}
@@ -31,11 +31,8 @@ defmodule Sluice do
           {:DOWN, ^ref, :process, ^server, :shutdown} ->
             :ok
 
-          {:DOWN, ^ref, :process, ^server, {:shutdown, {:failed_to_run_action, step, reason}}} ->
-            {:error, {:failed_to_run_action, step, reason}}
-
           {:DOWN, ^ref, :process, ^server, {:shutdown, result}} ->
-            {:ok, result}
+            result
 
           {:DOWN, ^ref, :process, ^server, reason} ->
             {:error, reason}
