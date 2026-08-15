@@ -5,8 +5,8 @@ defmodule Sluice.Server do
             sluice: module(),
             action_sup: pid(),
             user_state: any(),
-            monitored: %{pid() => {reference(), Sluice.action()}},
-            running_tags: %{any() => pid()}
+            monitored: %{reference() => {Sluice.tag(), {module(), fun(), pos_integer()}}},
+            running_tags: %{Sluice.tag() => reference()}
           }
 
   defstruct [:sluice, :action_sup, :user_state, :monitored, :running_tags]
@@ -54,14 +54,14 @@ defmodule Sluice.Server do
         {:noreply, new_state}
 
       {action, new_state} ->
-        {tag, {module, function, args}} = action
+        {tag, {module, function, arity}} = action
         new_state = untrack_action(new_state, ref, tag)
 
         emit_event([:sluice, :action, :output], %{}, %{
           sluice: state.sluice,
           tag: tag,
           output: output,
-          call: {module, function, length(args)}
+          call: {module, function, arity}
         })
 
         handle_output({tag, output}, new_state)
@@ -76,13 +76,13 @@ defmodule Sluice.Server do
         {:noreply, new_state}
 
       {action, new_state} ->
-        {tag, {module, function, args}} = action
+        {tag, {module, function, arity}} = action
         new_state = untrack_action(new_state, ref, tag)
 
         emit_event([:sluice, :action, :exception], %{}, %{
           sluice: state.sluice,
           tag: tag,
-          call: {module, function, args},
+          call: {module, function, arity},
           reason: reason
         })
 
@@ -92,11 +92,11 @@ defmodule Sluice.Server do
 
   defp handle_output(output, state) do
     case state.sluice.handle_output(output, state.user_state) do
-      :complete ->
-        {:stop, :shutdown, state}
+      :stop ->
+        {:stop, {:shutdown, :ok}, state}
 
-      {:complete, result} ->
-        {:stop, {:shutdown, result}, state}
+      {:stop, result} ->
+        {:stop, {:shutdown, {:ok, result}}, state}
 
       {:wait, user_state} ->
         {:noreply, %{state | user_state: user_state}}
@@ -112,7 +112,7 @@ defmodule Sluice.Server do
   defp validate_and_run_actions(actions, state) do
     case validate_action_tags(actions, state.running_tags) do
       :ok -> run_actions(actions, state)
-      {:error, reason} -> {:stop, {:shutdown, reason}, state}
+      error -> {:stop, {:shutdown, error}, state}
     end
   end
 
@@ -134,21 +134,26 @@ defmodule Sluice.Server do
   end
 
   defp run_actions(actions, state) do
-    case Enum.reduce_while(actions, state, fn action, state ->
-           case start_action(action, state) do
-             {:ok, state} -> {:cont, state}
-             {:error, reason} -> {:halt, {:error, reason, state}}
-           end
-         end) do
-      {:error, reason, state} -> {:stop, {:shutdown, reason}, state}
-      state -> {:noreply, state}
+    start_result =
+      Enum.reduce_while(actions, state, fn action, state ->
+        case start_action(action, state) do
+           {:ok, state} -> {:cont, state}
+           error -> {:halt, {error, state}}
+         end
+       end)
+
+    case start_result do
+      {{:error, _reason} = error, state} ->
+        {:stop, {:shutdown, error}, state}
+      state ->
+        {:noreply, state}
     end
   end
 
   defp run_action(action, state) do
     case start_action(action, state) do
       {:ok, state} -> {:noreply, state}
-      {:error, reason} -> {:stop, {:shutdown, {:error, reason}}, state}
+      error -> {:stop, {:shutdown, error}, state}
     end
   end
 
@@ -179,7 +184,7 @@ defmodule Sluice.Server do
 
     %{
       state
-      | monitored: Map.put(state.monitored, ref, {tag, {module, function, args}}),
+      | monitored: Map.put(state.monitored, ref, {tag, {module, function, length(args)}}),
         running_tags: Map.put(state.running_tags, tag, ref)
     }
   end

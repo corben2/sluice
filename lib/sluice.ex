@@ -18,10 +18,12 @@ defmodule Sluice do
   @callback handle_output(output :: any(), state :: any()) ::
               {:next, action(), state :: any()}
               | {:next, [action()], state :: any()}
-              | :complete
-              | {:complete, result :: any()}
+              | :stop
+              | {:stop, result :: any()}
               | {:wait, state :: any()}
 
+  @spec start(module(), any()) ::
+          :ok | {:ok, result :: any()} | {:error, {:duplicate_running_action_tag, tag()}}
   def start(module, init_arg) do
     case Sluice.Supervisor.start_instance(module, init_arg) do
       {:ok, server} ->

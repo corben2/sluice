@@ -43,7 +43,7 @@ defmodule SluiceTest do
     @impl Sluice
     def handle_output({:single, {:done, parent}}, _state) do
       send(parent, {:sluice_complete, self()})
-      :complete
+      :stop
     end
   end
 
@@ -77,7 +77,7 @@ defmodule SluiceTest do
 
     def handle_output({:second, {:second_action_done, parent}}, _state) do
       send(parent, {:sluice_complete, self()})
-      :complete
+      :stop
     end
   end
 
@@ -93,7 +93,7 @@ defmodule SluiceTest do
     # Never called, but required by behaviour
     @impl Sluice
     def handle_output(_output, _state) do
-      :complete
+      :stop
     end
   end
 
@@ -114,7 +114,7 @@ defmodule SluiceTest do
 
     @impl Sluice
     def handle_output({:result, {:done, result}}, _state) do
-      {:complete, result}
+      {:stop, result}
     end
   end
 
@@ -148,7 +148,7 @@ defmodule SluiceTest do
 
       if length(results) == 2 do
         send(state.parent, {:parallel_complete, self()})
-        :complete
+        :stop
       else
         {:wait, %{state | results: results}}
       end
@@ -173,7 +173,7 @@ defmodule SluiceTest do
     @impl Sluice
     def handle_output({:crash, {:exception, reason}}, state) do
       send(state.parent, {:crashed, reason})
-      :complete
+      :stop
     end
   end
 
@@ -191,7 +191,7 @@ defmodule SluiceTest do
 
     @impl Sluice
     def handle_output(_output, _state) do
-      :complete
+      :stop
     end
   end
 
@@ -234,7 +234,7 @@ defmodule SluiceTest do
     end
 
     test "returns a result from sluice" do
-      assert 42 = Sluice.start(ResultSluice, 21)
+      assert {:ok, 42} = Sluice.start(ResultSluice, 21)
     end
   end
 
@@ -280,7 +280,7 @@ defmodule SluiceTest do
 
       assert metadata.sluice == CrashSluice
       assert metadata.tag == :crash
-      assert metadata.call == {CrashAction, :run, [self()]}
+      assert metadata.call == {CrashAction, :run, 1}
       assert {%RuntimeError{}, _stacktrace} = metadata.reason
     end
   end
