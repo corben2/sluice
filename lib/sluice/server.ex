@@ -15,6 +15,10 @@ defmodule Sluice.Server do
     GenServer.start_link(__MODULE__, args, opts)
   end
 
+  def start(args, opts \\ []) do
+    GenServer.start(__MODULE__, args, opts)
+  end
+
   @impl true
   def init({sluice, init_arg}) do
     case sluice.init(init_arg) do

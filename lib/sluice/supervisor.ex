@@ -1,11 +1,11 @@
 defmodule Sluice.Supervisor do
   use DynamicSupervisor
 
-  def start_link([]) do
-    DynamicSupervisor.start_link(__MODULE__, [], name: __MODULE__)
+  def start_link(opts \\ []) do
+    DynamicSupervisor.start_link(__MODULE__, [], opts)
   end
 
-  def start_instance(module, init_arg) do
+  def start(module, init_arg) do
     DynamicSupervisor.start_child(Sluice.Supervisor, {Sluice.Server, {module, init_arg}})
   end
 

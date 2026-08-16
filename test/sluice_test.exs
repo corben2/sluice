@@ -2,7 +2,6 @@ defmodule SluiceTest do
   use ExUnit.Case
 
   setup do
-    start_supervised!({Sluice.Supervisor, []})
     {:ok, _started} = Application.ensure_all_started(:telemetry)
     :ok
   end
@@ -229,7 +228,7 @@ defmodule SluiceTest do
     test "rejects duplicate tags among running actions" do
       parent = self()
 
-      assert {:duplicate_running_action_tag, :duplicate} =
+      assert {:error, {:duplicate_running_action_tag, :duplicate}} =
                Sluice.start(DuplicateTagSluice, parent)
     end
 

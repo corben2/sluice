@@ -25,7 +25,7 @@ defmodule Sluice do
   @spec start(module(), any()) ::
           :ok | {:ok, result :: any()} | {:error, {:duplicate_running_action_tag, tag()}}
   def start(module, init_arg) do
-    case Sluice.Supervisor.start_instance(module, init_arg) do
+    case Sluice.Server.start({module, init_arg}) do
       {:ok, server} ->
         ref = Process.monitor(server)
 
