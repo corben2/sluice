@@ -194,33 +194,33 @@ defmodule SluiceTest do
     end
   end
 
-  describe "start/2" do
+  describe "run/2" do
     test "runs a single action to completion" do
-      assert :ok = Sluice.start(SingleActionSluice, self())
+      assert :ok = Sluice.run(SingleActionSluice, self())
       assert_receive {:action_ran, _runner_pid}
       assert_receive {:sluice_complete, _server_pid}
     end
 
     test "runs multiple actions to completion" do
-      assert :ok = Sluice.start(MultiActionSluice, self())
+      assert :ok = Sluice.run(MultiActionSluice, self())
       assert_receive {:first_action, _}
       assert_receive {:second_action, _}
       assert_receive {:sluice_complete, _}
     end
 
     test "runs parallel actions from init" do
-      assert :ok = Sluice.start(ParallelInitSluice, self())
+      assert :ok = Sluice.run(ParallelInitSluice, self())
       assert_receive {:action_a_ran, _}
       assert_receive {:action_b_ran, _}
       assert_receive {:parallel_complete, _}
     end
 
     test "returns {:error, reason} when init fails" do
-      assert {:error, :init_failed} = Sluice.start(FailInitSluice, self())
+      assert {:error, :init_failed} = Sluice.run(FailInitSluice, self())
     end
 
     test "handles action crashes via handle_output" do
-      assert :ok = Sluice.start(CrashSluice, self())
+      assert :ok = Sluice.run(CrashSluice, self())
       assert_receive {:crashed, reason}
       assert {%RuntimeError{}, _stacktrace} = reason
     end
@@ -229,11 +229,16 @@ defmodule SluiceTest do
       parent = self()
 
       assert {:error, {:duplicate_running_action_tag, :duplicate}} =
-               Sluice.start(DuplicateTagSluice, parent)
+               Sluice.run(DuplicateTagSluice, parent)
+    end
+
+    test "rejects duplicate initial actions during server startup" do
+      assert {:error, {:duplicate_running_action_tag, :duplicate}} =
+               Sluice.Server.start({DuplicateTagSluice, self()})
     end
 
     test "returns a result from sluice" do
-      assert {:ok, 42} = Sluice.start(ResultSluice, 21)
+      assert {:ok, 42} = Sluice.run(ResultSluice, 21)
     end
   end
 
@@ -242,7 +247,7 @@ defmodule SluiceTest do
       event = [:sluice, :action, :start]
       attach_telemetry(event)
 
-      assert :ok = Sluice.start(SingleActionSluice, self())
+      assert :ok = Sluice.run(SingleActionSluice, self())
       assert_receive {:telemetry, ^event, %{}, metadata}
 
       assert metadata == %{
@@ -257,7 +262,7 @@ defmodule SluiceTest do
       attach_telemetry(event)
 
       parent = self()
-      run = Task.async(fn -> Sluice.start(SingleActionSluice, parent) end)
+      run = Task.async(fn -> Sluice.run(SingleActionSluice, parent) end)
 
       assert_receive {:telemetry, ^event, %{}, metadata}
       Task.await(run)
@@ -274,7 +279,7 @@ defmodule SluiceTest do
       event = [:sluice, :action, :exception]
       attach_telemetry(event)
 
-      assert :ok = Sluice.start(CrashSluice, self())
+      assert :ok = Sluice.run(CrashSluice, self())
       assert_receive {:telemetry, ^event, %{}, metadata}
 
       assert metadata.sluice == CrashSluice
@@ -288,8 +293,8 @@ defmodule SluiceTest do
     test "two sluices run independently" do
       parent = self()
 
-      task1 = Task.async(fn -> Sluice.start(SingleActionSluice, parent) end)
-      task2 = Task.async(fn -> Sluice.start(SingleActionSluice, parent) end)
+      task1 = Task.async(fn -> Sluice.run(SingleActionSluice, parent) end)
+      task2 = Task.async(fn -> Sluice.run(SingleActionSluice, parent) end)
 
       assert :ok = Task.await(task1)
       assert :ok = Task.await(task2)

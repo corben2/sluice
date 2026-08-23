@@ -22,7 +22,26 @@ defmodule Sluice.Server do
   @impl true
   def init({sluice, init_arg}) do
     case sluice.init(init_arg) do
-      {:next, actions, user_state} ->
+      {:next, actions, user_state} when is_list(actions) ->
+        case validate_action_tags(actions, %{}) do
+          :ok ->
+            {:ok, action_sup} = Task.Supervisor.start_link(strategy: :one_for_one)
+
+            state = %__MODULE__{
+              sluice: sluice,
+              action_sup: action_sup,
+              user_state: user_state,
+              monitored: %{},
+              running_tags: %{}
+            }
+
+            {:ok, state, {:continue, actions}}
+
+          {:error, reason} ->
+            {:stop, reason}
+        end
+
+      {:next, action, user_state} ->
         {:ok, action_sup} = Task.Supervisor.start_link(strategy: :one_for_one)
 
         state = %__MODULE__{
@@ -33,7 +52,7 @@ defmodule Sluice.Server do
           running_tags: %{}
         }
 
-        {:ok, state, {:continue, actions}}
+        {:ok, state, {:continue, action}}
 
       other ->
         other
@@ -126,7 +145,7 @@ defmodule Sluice.Server do
       |> Enum.map(&elem(&1, 0))
       |> Kernel.++(Map.keys(running_tags))
       |> Enum.frequencies()
-      |> Enum.find(fn _tag, count -> count > 1 end)
+      |> Enum.find(fn {_tag, count} -> count > 1 end)
 
     case duped do
       nil ->
@@ -141,14 +160,15 @@ defmodule Sluice.Server do
     start_result =
       Enum.reduce_while(actions, state, fn action, state ->
         case start_action(action, state) do
-           {:ok, state} -> {:cont, state}
-           error -> {:halt, {error, state}}
-         end
-       end)
+          {:ok, state} -> {:cont, state}
+          error -> {:halt, {error, state}}
+        end
+      end)
 
     case start_result do
       {{:error, _reason} = error, state} ->
         {:stop, {:shutdown, error}, state}
+
       state ->
         {:noreply, state}
     end
